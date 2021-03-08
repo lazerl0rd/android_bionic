@@ -34,12 +34,13 @@
 typedef struct {
   uint32_t flags;
   void* stack_base;
+  char stack_reuse;
   size_t stack_size;
   size_t guard_size;
   int32_t sched_policy;
   int32_t sched_priority;
 #ifdef __LP64__
-  char __reserved[16];
+  char __reserved[15];
 #endif
 } pthread_attr_t;
 

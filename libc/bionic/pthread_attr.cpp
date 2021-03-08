@@ -44,6 +44,7 @@ __BIONIC_WEAK_FOR_NATIVE_BRIDGE
 int pthread_attr_init(pthread_attr_t* attr) {
   attr->flags = 0;
   attr->stack_base = nullptr;
+  attr->stack_reuse = false;
   attr->stack_size = PTHREAD_STACK_SIZE_DEFAULT;
   attr->guard_size = PTHREAD_GUARD_SIZE;
   attr->sched_policy = SCHED_NORMAL;
@@ -132,6 +133,7 @@ int pthread_attr_setstacksize(pthread_attr_t* attr, size_t stack_size) {
     return EINVAL;
   }
   attr->stack_size = stack_size;
+  attr->stack_reuse = false;
   return 0;
 }
 
@@ -151,6 +153,7 @@ int pthread_attr_setstack(pthread_attr_t* attr, void* stack_base, size_t stack_s
   }
   attr->stack_base = stack_base;
   attr->stack_size = stack_size;
+  attr->stack_reuse = false;
   return 0;
 }
 
@@ -184,7 +187,7 @@ static uintptr_t __get_main_stack_startstack() {
   return startstack;
 }
 
-static int __pthread_attr_getstack_main_thread(void** stack_base, size_t* stack_size) {
+static int __pthread_attr_getstack_main_thread(void** stack_base, size_t* stack_size, char stack_reuse) {
   ErrnoRestorer errno_restorer;
 
   rlimit stack_limit;
@@ -195,6 +198,11 @@ static int __pthread_attr_getstack_main_thread(void** stack_base, size_t* stack_
   // If the current RLIMIT_STACK is RLIM_INFINITY, only admit to an 8MiB stack for sanity's sake.
   if (stack_limit.rlim_cur == RLIM_INFINITY) {
     stack_limit.rlim_cur = 8 * 1024 * 1024;
+  }
+
+  // Preserve the cached address range if it has already been hunted.
+  if (stack_reuse && (*stack_base != nullptr)) {
+    return 0;
   }
 
   // Ask the kernel where our main thread's stack started.
@@ -242,6 +250,7 @@ int pthread_attr_getguardsize(const pthread_attr_t* attr, size_t* guard_size) {
 __BIONIC_WEAK_FOR_NATIVE_BRIDGE
 int pthread_getattr_np(pthread_t t, pthread_attr_t* attr) {
   pthread_internal_t* thread = reinterpret_cast<pthread_internal_t*>(t);
+  int ret = 0;
   *attr = thread->attr;
   // We prefer reading join_state here to setting thread->attr.flags in pthread_detach.
   // Because data race exists in the latter case.
@@ -251,9 +260,12 @@ int pthread_getattr_np(pthread_t t, pthread_attr_t* attr) {
   // The main thread's stack information is not stored in thread->attr, and we need to
   // collect that at runtime.
   if (thread->tid == getpid()) {
-    return __pthread_attr_getstack_main_thread(&attr->stack_base, &attr->stack_size);
+    ret = __pthread_attr_getstack_main_thread(&attr->stack_base, &attr->stack_size, attr->stack_reuse);
+    if (!attr->stack_reuse) {
+      attr->stack_reuse = true;
+    }
   }
-  return 0;
+  return ret;
 }
 
 __BIONIC_WEAK_FOR_NATIVE_BRIDGE
